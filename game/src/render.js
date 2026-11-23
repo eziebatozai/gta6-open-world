@@ -1,141 +1,142 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+// Drawing only: the camera, the world and everything in it, the day's light.
+// The static city is blitted from its prerendered layer; cars, people, the
+// player and effects are drawn over it; the HUD is drawn by hud.js.
+import { WORLD } from './config.js';
+import { LANDMARKS } from './world.js';
+import { drawCar } from './vehicles.js';
+import { drawPlayer } from './player.js';
+import { drawPedestrians } from './pedestrians.js';
+import { drawPolice } from './police.js';
+import { drawBullets } from './combat.js';
+import { drawEffects } from './effects.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
-
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
-
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
+export const SCREEN_COMPLETE = 'complete';
 
 export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
+  const ctx = canvas.getContext('2d');
+  const view = { w: 1280, h: 720, dpr: 1 };
+  const camera = { x: 1800, y: 1300, zoom: 1 };
 
   function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    view.dpr = dpr;
+    view.w = window.innerWidth;
+    view.h = window.innerHeight;
+    canvas.width = Math.round(view.w * dpr);
+    canvas.height = Math.round(view.h * dpr);
+    canvas.style.width = `${view.w}px`;
+    canvas.style.height = `${view.h}px`;
   }
-
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
-  }
-
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
-    }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
-  }
-
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
-  }
-
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
   resize();
   window.addEventListener('resize', resize);
-  return { draw };
+
+  /** Sun tint by the game clock (minutes since midnight). */
+  function dayTint(clock) {
+    const hour = (clock / 60) % 24;
+    if (hour >= 21 || hour < 5) return { color: 'rgba(16,24,64,0.38)', night: true };
+    if (hour >= 17 && hour < 19) return { color: 'rgba(255,140,60,0.14)', night: false };
+    if (hour >= 5 && hour < 7) return { color: 'rgba(255,180,90,0.12)', night: false };
+    return { color: 'rgba(255,240,200,0.05)', night: false };
+  }
+
+  function draw(game) {
+    const player = game.player;
+    const px = player.car ? player.car.x : player.x;
+    const py = player.car ? player.car.y : player.y;
+    const wantZoom = player.car ? 0.8 : 1.0;
+    camera.zoom += (wantZoom - camera.zoom) * 0.04;
+    camera.x += (px - camera.x) * 0.08;
+    camera.y += (py - camera.y) * 0.08;
+    const shake = game.effects.shake;
+    const shX = shake > 0 ? (Math.random() - 0.5) * shake : 0;
+    const shY = shake > 0 ? (Math.random() - 0.5) * shake : 0;
+
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    ctx.fillStyle = '#11141b';
+    ctx.fillRect(0, 0, view.w, view.h);
+    const vw = view.w / camera.zoom;
+    const vh = view.h / camera.zoom;
+    const sx = Math.max(0, Math.min(WORLD.width - vw, camera.x - vw / 2 + shX));
+    const sy = Math.max(0, Math.min(WORLD.height - vh, camera.y - vh / 2 + shY));
+
+    ctx.save();
+    ctx.translate(view.w / 2, view.h / 2);
+    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(-(camera.x + shX), -(camera.y + shY));
+    game.city.drawStatic(ctx, sx, sy, vw, vh, sx, sy, vw, vh);
+
+    // Cash pickups.
+    for (const pick of game.pickups) {
+      const bob = Math.sin(game.time * 3 + pick.x) * 2;
+      ctx.fillStyle = '#2a7a3f';
+      ctx.beginPath();
+      ctx.arc(pick.x, pick.y + bob, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#7ac74f';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('$', pick.x, pick.y + bob + 4);
+    }
+
+    // Mission target beacon.
+    const target = game.missionTarget;
+    if (target) {
+      const pulse = 0.6 + Math.sin(game.time * 4) * 0.25;
+      ctx.fillStyle = `rgba(255,217,74,${0.18 * pulse})`;
+      ctx.fillRect(target.x - 26, target.y - 130, 52, 130);
+      ctx.fillStyle = '#ffd94a';
+      ctx.beginPath();
+      ctx.arc(target.x, target.y - 12 + Math.sin(game.time * 4) * 4, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#111111';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', target.x, target.y - 8 + Math.sin(game.time * 4) * 4);
+    }
+
+    // Landmark labels, only near the player so the city stays clean.
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    for (const key of Object.keys(LANDMARKS)) {
+      const mark = LANDMARKS[key];
+      const d = Math.hypot(mark.x - px, mark.y - py);
+      if (d > 420) continue;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      const tw = ctx.measureText(mark.name).width + 12;
+      ctx.fillRect(mark.x - tw / 2, mark.y - 46, tw, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(mark.name, mark.x, mark.y - 34);
+    }
+
+    // Cars: parked, traffic, police, then the player's.
+    for (const car of game.traffic.parked) drawCar(ctx, car, game.time);
+    for (const car of game.traffic.moving) drawCar(ctx, car, game.time);
+    for (const car of game.police.cars) drawCar(ctx, car, game.time);
+    if (player.car) drawCar(ctx, player.car, game.time);
+
+    drawPedestrians(ctx, game.peds, game.time);
+    drawPolice(ctx, game.police, game.time);
+    drawPlayer(ctx, player, game.time);
+    drawBullets(ctx, game.bullets);
+    drawEffects(ctx, game.effects);
+    ctx.restore();
+
+    // Day and night light, over the world but under the HUD.
+    const tint = dayTint(game.clock);
+    ctx.fillStyle = tint.color;
+    ctx.fillRect(0, 0, view.w, view.h);
+    if (tint.night) {
+      // A pool of light around the player at night.
+      const grad = ctx.createRadialGradient(view.w / 2, view.h / 2, 60, view.w / 2, view.h / 2, 320);
+      grad.addColorStop(0, 'rgba(255,220,150,0.10)');
+      grad.addColorStop(1, 'rgba(255,220,150,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, view.w, view.h);
+    }
+  }
+
+  return { ctx, view, camera, draw };
 }
